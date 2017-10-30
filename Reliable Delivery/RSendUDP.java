@@ -118,7 +118,6 @@ public class RSendUDP implements RSendUDPI, Runnable
       mtu = socket.getSendBufferSize();
       String fileText = new Scanner(new File(filename)).useDelimiter("\\Z").next();
       ArrayList<byte[]> packets = buildPackets(fileText, mtu);
-      System.out.println(packets.size());
 
       System.out.println("Sending "+this.filename+" from "+socket.getLocalAddress().getHostAddress()+":"+this.getLocalPort()+" to "+this.remoteReceiver.toString()+" with "+fileText.length()+" bytes");
       if (sendMode == 0)
@@ -152,18 +151,47 @@ public class RSendUDP implements RSendUDPI, Runnable
             System.out.println("Message " + (lastSent + 1) + " sent with " + packet.data.length + " bytes of actual data");
             lastSent++;
           }
-          else if (checkTimeout() != null)
+          else if (sentPackets.get(lastSent).acked == 0x00 && ((System.currentTimeMillis() - sentPackets.get(lastSent).timeSent) > this.timeout))
           {
-            int i = checkTimeout();
-            System.out.println("Message " + i + " timed out");
-            socket.send(new DatagramPacket(sentPackets.get(i).getPacketBytes(), sentPackets.get(i).getPacketBytes().length, remoteReceiver));
-            sentPackets.get(i).timeSent = System.currentTimeMillis();
-            System.out.println("Message " + i + " sent with " + sentPackets.get(i).data.length + " bytes of actual data");
+            System.out.println("Message " + lastSent + " timed out");
+            socket.send(new DatagramPacket(sentPackets.get(lastSent).getPacketBytes(), sentPackets.get(lastSent).getPacketBytes().length, remoteReceiver));
+            sentPackets.get(lastSent).timeSent = System.currentTimeMillis();
+            System.out.println("Message " + lastSent + " sent with " + sentPackets.get(lastSent).data.length + " bytes of actual data");
           }
         }
       }
+      else
+      {
+          while(!endOfFile)
+          {
+            if ((lastSent - lastAckReceived) < modeParameter && lastSent + 1 == packets.size() - 1)
+            {
+              UDPPacket packet = new UDPPacket(packets.get(lastSent + 1), (short)(lastSent + 1), (byte)0x00, (byte)0x01, System.currentTimeMillis(), (byte)0x00);
+              socket.send(new DatagramPacket(packet.getPacketBytes(), packet.getPacketBytes().length, remoteReceiver));
+              sentPackets.add(packet);
+              System.out.println("Message " + (lastSent + 1) + " sent with " + packet.data.length + " bytes of actual data");
+              lastSent++;
+            }
+            else if ((lastSent - lastAckReceived) < modeParameter && lastSent + 1 < packets.size())
+            {
+              UDPPacket packet = new UDPPacket(packets.get(lastSent + 1), (short)(lastSent + 1), (byte)0x00, (byte)0x00, System.currentTimeMillis(), (byte)0x00);
+              socket.send(new DatagramPacket(packet.getPacketBytes(), packet.getPacketBytes().length, remoteReceiver));
+              sentPackets.add(packet);
+              System.out.println("Message " + (lastSent + 1) + " sent with " + packet.data.length + " bytes of actual data");
+              lastSent++;
+            }
+            else if (checkTimeout() != null)
+            {
+              int i = checkTimeout();
+              System.out.println("Message " + i + " timed out");
+              socket.send(new DatagramPacket(sentPackets.get(i).getPacketBytes(), sentPackets.get(i).getPacketBytes().length, remoteReceiver));
+              sentPackets.get(lastSent).timeSent = System.currentTimeMillis();
+              System.out.println("Message " + i + " sent with " + sentPackets.get(i).data.length + " bytes of actual data");
+            }
+          }
+      }
       Long endTime = System.currentTimeMillis();
-      System.out.println("Successfully transferred " + filename + " (" + fileText.length() + ") " + "in " + (((double)endTime - (double)startTime)/1000) + " seconds");
+      System.out.println("Successfully transferred " + filename + " (" + fileText.length() + ") " + "in " + (((double)endTime - startTime) / 1000) + " seconds");
     }
     catch (SocketException e)
     {
@@ -180,13 +208,16 @@ public class RSendUDP implements RSendUDPI, Runnable
     return true;
   }
 
-  private synchronized Integer checkTimeout()
+  private Integer checkTimeout()
   {
-    //System.out.println("Check timeout");
-			if(sentPackets.get(lastSent).acked == 0x00 && ((System.currentTimeMillis() - sentPackets.get(lastSent).timeSent) > this.timeout))
-				return lastSent;
-    //System.out.println("null");
-		return null;
+		for (int i = Math.max(0, lastAckReceived); i < lastSent; i++)
+    {
+      if (sentPackets.get(i).acked == 0x00 && (System.currentTimeMillis() - sentPackets.get(i).timeSent) > timeout)
+      {
+        return i;
+      }
+    }
+    return null;
 	}
 
   private synchronized void updateLastAck(short seqNum)

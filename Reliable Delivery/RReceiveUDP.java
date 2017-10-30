@@ -16,7 +16,7 @@ public class RReceiveUDP implements RReceiveUDPI, Runnable
   private UDPSocket socket;
   private int mtu;
   private InetSocketAddress sender;
-  private ArrayList<byte[]> data = new ArrayList<byte[]>();
+  private ArrayList<byte[]> packets = new ArrayList<byte[]>();
   private Long finishedTimeout;
   private boolean finished = false;
 
@@ -95,30 +95,30 @@ public class RReceiveUDP implements RReceiveUDPI, Runnable
       {
         System.out.println("Receiving "+this.filename+" at "+socket.getLocalAddress().getCanonicalHostName()+":"+this.getLocalPort()+" using sliding window");
       }
-        Thread t = new Thread(this);
-        t.start();
+        new Thread(this).start();
+        PrintWriter fileWriter = new PrintWriter(filename);
+
         while (finishedTimeout > System.currentTimeMillis())
         {
           Thread.sleep(10);
+
         }
         long stopTime = System.currentTimeMillis();
         int totalBytes = 0;
-        for (byte[] b: data)
+        for (byte[] packet: packets)
         {
-          totalBytes += b.length;
+          totalBytes += packet.length;
         }
 
         byte[] file = new byte[totalBytes];
         ByteBuffer buffer = ByteBuffer.wrap(file);
-        for(byte[] b: data)
+        for(byte[] packet: packets)
         {
-          buffer.put(b);
+          buffer.put(packet);
         }
-
-      PrintWriter fileWriter = new PrintWriter(filename);
-      fileWriter.print(new String(file));
-      fileWriter.close();
-      System.out.println("Successfully received " + filename + " (" + totalBytes + ") " + " in " + (stopTime-startTime)/1000 + " seconds");
+        fileWriter.write(new String(file));
+        fileWriter.close();
+      System.out.println("Successfully received " + filename + " (" + totalBytes + ") " + " in " + ((double)stopTime - startTime) / 1000 + " seconds");
     }
     catch (Exception e)
     {
@@ -130,45 +130,55 @@ public class RReceiveUDP implements RReceiveUDPI, Runnable
 
   public void run()
   {
+    long longestDelay = 0;
     while (finishedTimeout > System.currentTimeMillis())
     {
-      try
+      if (recMode == 0)
       {
-        byte[] buffer = new byte[mtu];
-        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        socket.receive(packet);
-        UDPPacket dataPacket = UDPPacket.getPacketFields(buffer, packet.getLength());
+        try
+        {
+          byte[] buffer = new byte[mtu];
+          DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+          socket.receive(packet);
+          UDPPacket dataPacket = UDPPacket.getPacketFields(buffer, packet.getLength());
+          if (System.currentTimeMillis() - dataPacket.timeSent > longestDelay)
+          {
+            longestDelay = System.currentTimeMillis() - dataPacket.timeSent;
+          }
+          if (sender == null)
+          {
+            sender = new InetSocketAddress(packet.getAddress(), packet.getPort());
+            System.out.println("Connection established from " + sender.toString());
+          }
+          while((packets.size() - 1) < dataPacket.seqNum)
+          {
+            packets.add(null);
+          }
+          packets.set(dataPacket.seqNum, dataPacket.data);
+          System.out.println("Message "+ dataPacket.seqNum+" received with "+dataPacket.data.length+" bytes of actual data");
 
-        if (sender == null)
-        {
-          sender = new InetSocketAddress(packet.getAddress(), packet.getPort());
-          System.out.println("Connection established from " + sender.toString());
+          if (dataPacket.endOfFile == 0x01)
+          {
+            UDPPacket ack = new UDPPacket(new byte[0], dataPacket.seqNum, (byte)0x01, (byte)0x01, System.currentTimeMillis(), (byte)0x00);
+            socket.send(new DatagramPacket(ack.getPacketBytes(), ack.getPacketBytes().length, sender));
+            System.out.println("Message "+dataPacket.seqNum+" acknowledged");
+            finishedTimeout = System.currentTimeMillis() + (4 * longestDelay);
+          }
+          else
+          {
+            UDPPacket ack = new UDPPacket(new byte[0], dataPacket.seqNum, (byte)0x01, (byte)0x00, System.currentTimeMillis(), (byte)0x00);
+            socket.send(new DatagramPacket(ack.getPacketBytes(), ack.getPacketBytes().length, sender));
+            System.out.println("Message "+dataPacket.seqNum+" acknowledged");
+          }
         }
-        while((data.size() - 1) < dataPacket.seqNum)
+        catch (IOException e)
         {
-          data.add(null);
-        }
-        data.set(dataPacket.seqNum, dataPacket.data);
-        System.out.println("Message "+ dataPacket.seqNum+" received with "+dataPacket.data.length+" bytes of actual data");
-
-        if (dataPacket.endOfFile == 0x01)
-        {
-          System.out.println("lastAck");
-          UDPPacket ack = new UDPPacket(new byte[0], dataPacket.seqNum, (byte)0x01, (byte)0x01, System.currentTimeMillis(), (byte)0x00);
-          socket.send(new DatagramPacket(ack.getPacketBytes(), ack.getPacketBytes().length, sender));
-          System.out.println("Message "+dataPacket.seqNum+" acknowledged");
-          finishedTimeout = System.currentTimeMillis() + (2 * 2000);
-        }
-        else
-        {
-          UDPPacket ack = new UDPPacket(new byte[0], dataPacket.seqNum, (byte)0x01, (byte)0x00, System.currentTimeMillis(), (byte)0x00);
-          socket.send(new DatagramPacket(ack.getPacketBytes(), ack.getPacketBytes().length, sender));
-          System.out.println("Message "+dataPacket.seqNum+" acknowledged");
+          e.printStackTrace();
         }
       }
-      catch (IOException e)
+      else
       {
-        e.printStackTrace();
+          //sliding window
       }
     }
   }
