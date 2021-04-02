@@ -1,3 +1,0 @@
-Test file for UDP send.
-Some more lines to test the sending.
-Test test test. 1234
